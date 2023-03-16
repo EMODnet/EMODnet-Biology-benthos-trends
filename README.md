@@ -1,13 +1,13 @@
-# {{product_name}}
+# Temporal Turnover in European Macrobenthos Communities
 
 ## Introduction
 
-{{product_introduction}}
+This product builds on the EMODnet Biology data product [Presence/absence data of macrozoobenthos in the European Seas](https://github.com/EMODnet/EMODnet-Biology-Benthos-European-Seas) to derive estimates of temporal turnover in benthic communities on a spatial grid across European seas. This product only uses species-level records, and only uses sampling events where the full macrobenthic community was surveyed (i.e. where there are no 'NA' values in the presence/absence dataset for any species). Six time periods are considered, based on data availability: before 1990, 1990-1999, 2000-2004, 2005-2009, 2010-2014, and 2015 and after. A 1 degree grid is used to obtain reasonable numbers of repeat samples per grid cell. The code below could be adapted to set different time periods and/or a different grid resolution. This readme describes the product structure, including the workflow to generate the required derived datasets and the process for turning them into gridded maps of community turnover.
 
 ## Directory structure
 
 ```
-{{directory_name}}/
+EMODnet_benthos_trends/
 ├── analysis
 ├── data/
 │   ├── derived_data/
@@ -25,17 +25,593 @@
 
 ## Data series
 
-{{data_series}}
-
-```
-{{data_wfs_request}}
-```
+This product uses the EMODnet Biology data product [Presence/absence data of macrozoobenthos in the European Seas](https://github.com/EMODnet/EMODnet-Biology-Benthos-European-Seas). This is available as a single NetCDF file - because that file is large (~3.2GB) it is not included here. Rather, this product uses two datasets that are derived from the NetCDF file, and which are available in `data/derived_data`: `sample_events.csv` is a table of unique sampling events, including latitude, longitude, and sampling date; and `pres_df.csv` is a table of species presences, referenced by sample id (linked to `sample_events`) and species identity given as [WoRMS AphiaID](https://marinespecies.org/about.php). The full workflow for deriving these datasets from the raw NetCDF file is described in `docs/benthos-trends-dataprep`.
 
 ## Data product
 
 {{data_product_description}}
 
 ## More information:
+
+This document desrcibes the workflow for generating data and maps of spatial estimates of temporal turnover (species loss and gain, beta diversity) from the EMODnet macrobenthos presence-absence product. It uses processed versions of the dataset that are fully described in 'benthos trends dataprep'.
+
+First, load required packages:
+
+```{r, load_packages, message = FALSE}
+# basic data manipulation and visualisation
+library(tidyverse)
+library(here)
+library(janitor)
+library(viridis)
+library(biscale)
+# spatial data processing and mapping
+library(sf)
+library(terra)
+library(tidyterra)
+library(rnaturalearth)
+library(RNetCDF)
+# diversity and turnover analysis
+library(vegan)
+library(BAT)
+```
+
+Read in the datasets of sampling events and species presence that were generated in the previous document:
+
+```{r, read_data, message = FALSE}
+sample_events <- read_csv(here("data",
+                               "EMODnet-Biology-Benthos-European-Seas/sample_events.csv"))
+pres_df <- read_csv(here("data",
+                         "EMODnet-Biology-Benthos-European-Seas/pres_df.csv"))
+```
+
+To retain all sampling events (including those which do not sample the full benthic community, i.e. which return NA occurrences for some species), first assign the full data set to a new object and then filter to remove events which include NA occurrences:
+
+```{r, exclude_nas}
+sample_events_includingNA <- sample_events
+sample_events <- sample_events %>% filter(includes_na == FALSE)
+```
+
+Note that some sample events do not include any species from our presence data - for instance, they may only have recorded taxa at higher taxonomic levels. To restrict futher analyses to only those sampling events where we know we have species presences:
+```{r, filter_samples_to_species_data}
+sample_events <- sample_events %>% filter(sample_id %in% unique(pres_df$sample_id))
+```
+
+
+To determine a suitable set of time periods for temporal correlations, first look at number of events in five year blocks:
+```{r, five-yr-blocs}
+sample_events <- sample_events %>% 
+  mutate(year_5 = round(year/5)*5)
+ggplot(sample_events) + geom_bar(aes(x = year_5))
+
+```
+  
+To examine the spatial distribution of samples through time, we can make the data spatial (using the WGS84 EPG) and produce a quick plot:
+
+```{r, samples_x_time_x_space}
+ggplot(st_as_sf(sample_events, coords = c("lon", "lat"), crs = 4326)) +
+  geom_sf(size = 0.1) +
+  theme(axis.text.x = element_text(angle = 75, hjust = 1, vjust = 0.5, size = 6),
+        axis.text.y = element_text(size = 6)) +
+  facet_wrap(~ year_5)
+```
+  
+This shows not only more individual events through time, but also greater geographical spread, especially since ~1970s. It also suggests that regular time periods (e.g. every 5 or 10 years) will not be appropriate for estimating turnover. To try to get reasonably equal coverage, the following time periods are defined: before 1990, 1990-1999, 2000-2004, 2005-2009, 2010-2014, and 2015 and after:
+
+```{r, define_time_periods}
+sample_events <- sample_events %>%
+  mutate(time_slice = case_when(
+    year < 1990 ~ 1,
+    year >= 1990 & year <2000 ~ 2,
+    year >= 2000 & year <2005 ~ 3,
+    year >= 2005 & year <2010 ~ 4,
+    year >= 2010 & year <2015 ~ 5,
+    year >= 2015 ~ 6
+  ))
+
+sample_events %>% count(time_slice)
+```
+
+### Create gridded sampling events dataset
+
+The next step is to grid the presence-absence data. This uses a 1 degree grid to increase the number of grid cells that have samples at multiple time points. To set the extent of the grid we use the geographic extent of the sampling events data:
+```{r, show_spatial_extent}
+sample_events %>% select(lon, lat) %>% summary()
+```
+Use this to set a sensible extent and create a raster based on this:
+
+```{r, create_grid}
+extent_tb <- tibble(lon = c(-34, 59), lat = c(28, 82)) %>% 
+  st_as_sf(coords = c("lon", "lat"), crs = 4326)
+r <- rast(ext(extent_tb), resolution = 1, crs = crs(extent_tb))
+```
+
+Then create a raster of sampling events by time, with a layer for each of the six time slices, which we then fill from sampling events:
+
+```{r, create_samples_by_time_rast}
+# create 6-layer raster
+samp_event_by_time_r <- rep(r, 6)
+
+# vector of names for time slices
+time_slices <- c("pre1990", "1990s", "2000-2004", "2005-2009", "2010-2014", "post2015")
+
+# fill the raster from sample_events
+for(i in 1:nlyr(samp_event_by_time_r)){
+  samp_event_by_time_r[[i]] <- sample_events %>%
+    filter(time_slice == i) %>% 
+    dplyr::select(lon, lat) %>% 
+    as.matrix() %>% 
+    rasterize(r, fun = "length") %>%
+    setNames(time_slices[i])
+}
+
+```
+
+To map these, first use the `rnaturalearth` package to get a world coastline basemap:
+```{r, get_world}
+world <- rnaturalearth::ne_countries(scale = "medium", returnclass = "sf") %>% 
+  st_transform(crs = crs(r))
+```
+
+Then produce the map:
+
+```{r, map_samples_through_time}
+ggplot() +
+  geom_spatraster(data = log10(samp_event_by_time_r)) +
+  scale_fill_viridis_c(name = "log N Samples") +
+  geom_sf(data = world, colour = "grey95", fill = "grey85", lwd = 0.1, alpha = 0.5) +
+  xlim(as.vector(ext(r)[1:2])) +
+  ylim(as.vector(ext(r)[3:4])) +
+  coord_sf(expand = FALSE) +
+  facet_wrap(~lyr)
+
+```
+  
+Add a cell index from this grid back into the sampling events data:
+```{r, add_cellid_sample_events}
+sample_events <- sample_events %>% 
+  mutate(sample_cell = cellFromXY(r,
+                                  as.matrix(dplyr::select(sample_events, lon, lat))))
+
+```
+
+We can now check the number of time periods with samples per grid cell, summarised here:
+```{r, get_samples_per_cell_per_time, message = FALSE}
+sample_events %>%
+  dplyr::select(sample_cell, time_slice) %>%
+  distinct() %>%
+  count(sample_cell) %>%
+  count(n) %>% 
+  rename(n_time_periods = n, n_grid_cells = nn) %>% 
+  mutate(p_cells = round(n_grid_cells / sum(n_grid_cells), 2))
+```
+
+So of the `r n_distinct(sample_events$sample_cell)` grid cells with at least one sample in, around 43% have samples from only one of our defined time periods, and around 21% have samples from all six time periods. We can show the spatial distribution of these - here, separating cells sampled only once (i.e., those that cannot contribute to measures of turnover or temporal change), labelled `single_t`, and those sampled at least two times, labelled `multi_t`. This code creates a raster with two layers, one to display the `single_t` cells and one for the `multi_t` cells. 
+
+```{r}
+cells_single_time <- 
+  sample_events %>% select(sample_cell, time_slice) %>% 
+  distinct() %>% 
+  count(sample_cell) %>% filter(n == 1) %>%
+  pull(sample_cell)
+
+cells_multi_time <- 
+  sample_events %>% select(sample_cell, time_slice) %>% 
+  distinct() %>%  
+  count(sample_cell) %>% filter(n > 1) %>%
+  pull(sample_cell)
+
+single_multi_time <- c(r,r) %>% setNames(c("single_t", "multi_t"))
+
+values(single_multi_time[[1]]) <- NA
+values(single_multi_time[[1]])[cells_single_time] <- 1
+
+values(single_multi_time[[2]]) <- NA
+values(single_multi_time[[2]])[cells_multi_time] <- 1
+
+(single_v_multi_t_cell_map <- ggplot() +
+  geom_spatraster(data = single_multi_time) +
+  scale_fill_viridis_c(option = "turbo") +
+  geom_sf(data = world, colour = "grey95", fill = "grey85", lwd = 0.1, alpha = 0.5) +
+  xlim(as.vector(ext(r)[1:2])) +
+  ylim(as.vector(ext(r)[3:4])) +
+  coord_sf(expand = FALSE) +
+  theme(legend.position = "none") +
+  facet_wrap(~lyr)
+)
+```
+  
+
+### Gridded presence-absence
+
+We can now join the sampling events data to the main species presence dataset and summarise by grid cell:
+```{r, create_gridded_occs, message = FALSE}
+gridded_occs <- pres_df %>%
+  left_join(sample_events, join_by(sample_id)) %>%
+  group_by(aphia_id, time_slice, sample_cell) %>% 
+  summarise(sp_occs = n()) %>% 
+  arrange(sample_cell, time_slice) %>% ungroup()
+
+```
+
+For this to be useful for temporal turnover analyses, we need to filter only those cells with samples in more than one time period, using the `cells_multi_time` object created above:
+
+```{r, filter_occs_multi_time}
+gridded_occs <- gridded_occs %>%
+  filter(sample_cell %in% cells_multi_time)
+```
+
+
+This can be used to get occurrences of an individual species per grid cell through time, e.g.:
+```{r, get_occs_by_time_1sp}
+gridded_occs %>%
+  filter(aphia_id == 101160) %>% arrange(sample_cell, time_slice)
+
+```
+Which can be summarised, for example showing the number of individual grid cells occupied by this species in different numbers of time periods:
+```{r, message = FALSE}
+gridded_occs %>%
+  filter(aphia_id == 101160) %>%
+  count(sample_cell) %>% 
+  count(n) %>% 
+  rename(n_time_periods = n, n_grid_cells = nn)
+```
+However this does not account for the identity of cells, i.e. which cells were surveyed in the different time periods. The following section addresses that issue at the community level, be quantifying losses and gains of species at the gridd cell level over time, directly comparing cells sampled in successive time periods.
+
+## Benthic community turnover
+
+Calculating temporal turnover at the grid cell level requires a matrix of species presences and absences over time. To give an example of this, it is useful to identify a grid cell which has samples in each time period:
+```{r, get_example_grid_cell}
+gridded_occs %>% dplyr::select(time_slice, sample_cell) %>%
+  distinct() %>%
+  count(sample_cell) %>%
+  arrange(desc(n)) %>% 
+  head()
+
+```
+
+Any of these cells will work, we'll just use the first one (cell 1544). To convert this into a matrix of species occurrences:
+```{r, example_community_mat}
+(comm_mat_eg <- gridded_occs %>% filter(sample_cell == 1544) %>% 
+  mutate(pa = ifelse(sp_occs > 0, 1, 0)) %>% 
+  dplyr::select(time_slice, aphia_id, pa) %>% 
+  pivot_wider(names_from = aphia_id, values_from = pa, values_fill = 0) %>% 
+  column_to_rownames(var = "time_slice")
+)
+```
+
+This gives us a matrix with `r nrow(comm_mat_eg)` rows (one per time slice) and `r ncol(comm_mat_eg)` columns (one per species found in this grid cell over the whole survey period). This is now in the correct format to use the diversity functions in the `vegan` and `BAT` packages. Specifically here we use `BAT::beta()` and `vegan::betadiver()`
+
+```{r, get_beta_example}
+b_eg <- comm_mat_eg %>% 
+  as.matrix() %>% beta()
+abc_eg <- comm_mat_eg %>% betadiver(method = NULL)
+
+```
+
+These can be converted into summaries of species shared ('a'), species lost ('b), and species gained ('c') between each pair of time periods, as well as total beta diversity ('Btotal') and its richness ('Brich', i.e. due to changes in richness) and replacement ('Brepl', i.e. due to changes in composition) components. All of this is done in a single function, `get_species_turnover`, available in the 'scripts' folder, that we can source here:
+```{r, get_species_turnover}
+source(here("scripts", "get_species_turnover.R"))
+```
+
+To run this for our example grid cell:
+```{r}
+gridded_occs %>% filter(sample_cell == 1544) %>% get_species_turnover()
+
+```
+
+This can then be run over all cells, with a little extra manipulation at the end to add a variable indicating the relevant time comparison, and to show species lost and species gained as a proportion of all species occurring across both time periods (takes around a minute to run):
+```{r, get_species_turnover_all_cells, message = FALSE}
+species_turnover_allcells <- gridded_occs %>%
+  split(.$sample_cell) %>%
+  purrr::map(get_species_turnover, .progress = TRUE) %>% 
+  bind_rows()
+```
+
+The output is here manipulated a bit to add longer labels to the time periods, and to create composite time comparison variables (useful for plotting):
+
+```{r, tidy_species_turnover_all_cells}
+(species_turnover_allcells  <- species_turnover_allcells  %>% 
+  mutate(
+    t_start_long = case_match(
+      time_start,
+      1 ~ "pre1990",
+      2 ~ "1990s",
+      3 ~ "2000-2004",
+      4 ~ "2005-2009",
+      5 ~ "2012-2014",
+      6 ~ "post2015"
+    ),
+    t_comp_long = case_match(
+      time_comp,
+      1 ~ "pre1990",
+      2 ~ "1990s",
+      3 ~ "2000-2004",
+      4 ~ "2005-2009",
+      5 ~ "2012-2014",
+      6 ~ "post2015"),
+    t_comp = paste(time_start, time_comp, sep = "_"),
+    t_comp_lab = paste(t_start_long, t_comp_long, sep = "_v_"),
+    t_steps = time_comp - time_start,
+    b_prop = b / (a + b + c), c_prop = c / (a + b + c)
+  ) %>% 
+  select(sample_cell, t_comp, t_steps, beta_tot:c, b_prop, c_prop, t_comp_lab)
+)
+```
+
+
+This results in a data frame giving the sample cell (`sample_cell`), the relevant time comparison (`t_comp` - e.g. a value of `1_2` is the comparison between time slice 1 (pre-1990) and time slice 2 (1990s) - this is made explicit in `t_comp_lab`), the number of time steps in this comparison (`t_steps` - e.g. pre-1990 vs 1990s would be 1, pre-1990 vs 2000-2004 would be 2), and then the 6 diversity metrics: total, replacement, and richness beta diversity (`beta_tot`, `beta_repl`, `beta_rich`), and the number of species shared, lost, and gained from the first to the second time period (`a`, `b`, and `c`). Species lost and gained are also represented as a proportion of the total number of species lost, gained, and shared (`b_prop` and `c_prop`). To simplify visualisation and interpretation, it may be useful to filter the output to single time step comparisons.
+
+To turn this into gridded products for each time comparison and turnover measure, we need to add some more spatial meta data (lon and lot of each cell). This code also adds the total number of unique sampling events in each cell (summed over all time periods):
+```{r, add_sample_meta_to_turnover, message = FALSE}
+# Get sample cell metadata
+sample_cell_meta <- sample_events %>%
+  group_by(sample_cell) %>%
+  summarise(n_samps = n_distinct(sample_id)) %>% 
+  bind_cols(xyFromCell(r, .$sample_cell)) %>% 
+  rename(lon = x, lat = y)
+
+# Then join to species turnover data
+species_turnover_allcells <- species_turnover_allcells %>% 
+  left_join(sample_cell_meta, join_by(sample_cell)) %>% 
+  select(lon, lat, everything())
+
+```
+
+This then allows the creation of a raster for each diversity measure, with a layer for each time comparison. For example, for total beta diversity:
+```{r, create_beta_tot_raster}
+beta_tot_r <- species_turnover_allcells %>% 
+  select(lon, lat, t_comp, t_comp_lab, beta_tot) %>% 
+  arrange(t_comp) %>% 
+  select(-t_comp) %>% 
+  pivot_wider(names_from = t_comp_lab,
+              values_from = beta_tot) %>% 
+  rast(type = "xyz", crs = crs(r)) %>% 
+  project(r)
+
+```
+
+This can be plotted if required:
+```{r, plot_beta_tot_raster}
+
+(beta_tot_map <- ggplot() +
+  geom_spatraster(data = beta_tot_r) +
+  scale_fill_viridis_c(name = "beta (total)") +
+  geom_sf(data = world, colour = "grey95", fill = "grey85", lwd = 0.1, alpha = 0.5) +
+  xlim(as.vector(ext(r)[1:2])) +
+  ylim(as.vector(ext(r)[3:4])) +
+  coord_sf(expand = FALSE) +
+  facet_wrap(~lyr) +
+  theme_bw(base_size = 8) +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+)
+```
+  
+To plot an individual layer (or selection - here, pre-1990s v 1990s and pre-1990s v post-2015):
+```{r, plot_beta_tot_raster_layer}
+ggplot() +
+  geom_spatraster(data = select(beta_tot_r, 1, 5)) +
+  scale_fill_viridis_c(name = "beta (total)") +
+  geom_sf(data = world, colour = "grey95", fill = "grey85", lwd = 0.1, alpha = 0.5) +
+  xlim(as.vector(ext(r)[1:2])) +
+  ylim(as.vector(ext(r)[3:4])) +
+  coord_sf(expand = FALSE) +
+  facet_wrap(~lyr) +
+  theme_bw(base_size = 10) +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+```
+  
+A function to do all of this for a specified turnover metric, `create_turnover_raster`, is available in the 'scripts' folder, sourced here:
+```{r, create_turnover_raster}
+source(here("scripts", "create_turnover_raster.R"))
+```
+
+Running for `c_prop`, creating (but not displaying) a plot for 2000-2004 compared to all later time periods:
+```{r, get_turnover_raster_cprop}
+turnover_r_cprop <- create_turnover_raster(turnover_metric = "c_prop",
+                       create_plot = TRUE,
+                       display_plot = FALSE,
+                       plot_layers = c("2000-2004_v_2005-2009",
+                                       "2000-2004_v_2012-2014",
+                                       "2000-2004_v_post2015")
+                       )
+```
+
+To examine the data returned:
+```{r, display_cprop_raster}
+turnover_r_cprop$turnover_rast
+```
+And to display the plot:
+```{r, display_cprop_plot}
+turnover_r_cprop$turnover_plot
+```
+  
+The final step is to create the rasters for all diversity measures.
+```{r, create_all_turnover_rasters}
+beta_tot_r <- create_turnover_raster(turnover_metric = "beta_tot", create_plot = FALSE)
+beta_repl_r <- create_turnover_raster(turnover_metric = "beta_repl", create_plot = FALSE)
+beta_rich_r <- create_turnover_raster(turnover_metric = "beta_rich", create_plot = FALSE)
+
+sp_shared_r <- create_turnover_raster(turnover_metric = "a", create_plot = FALSE)
+sp_lost_r <- create_turnover_raster(turnover_metric = "b", create_plot = FALSE)
+sp_gained_r <- create_turnover_raster(turnover_metric = "c", create_plot = FALSE)
+
+p_sp_lost_r <- create_turnover_raster(turnover_metric = "b_prop", create_plot = FALSE)
+p_sp_gained_r <- create_turnover_raster(turnover_metric = "c_prop", create_plot = FALSE)
+
+```
+## Write products to file
+
+Write all of the rasters to file, as GeoTIFFs with LZW compression (set `gdal = "COMPRESS=NONE"` in the call to `writeRaster` if uncompressed files are required). Setting `overwrite = TRUE` means that any existing file of the same name will be overwritten.
+```{r, write_turnover_tifs}
+writeRaster(beta_tot_r, filename = here("maps", "beta_tot_r.tif"), overwrite = TRUE)
+writeRaster(beta_repl_r, filename = here("maps", "beta_repl_r.tif"), overwrite = TRUE)
+writeRaster(beta_rich_r, filename = here("maps", "beta_rich_r.tif"), overwrite = TRUE)
+writeRaster(sp_shared_r, filename = here("maps", "sp_shared_r.tif"), overwrite = TRUE)
+writeRaster(sp_lost_r, filename = here("maps", "sp_lost_r.tif"), overwrite = TRUE)
+writeRaster(sp_gained_r, filename = here("maps", "sp_gained_r.tif"), overwrite = TRUE)
+writeRaster(p_sp_lost_r, filename = here("maps", "p_sp_lost_r.tif"), overwrite = TRUE)
+writeRaster(p_sp_gained_r, filename = here("maps", "p_sp_gained_r.tif"), overwrite = TRUE)
+```
+
+To create the NetCDF versions, we adapt the EMODnet guide to creating NetCDF files from https://emodnet.github.io/EMODnet-Biology-products-erddap-demo/. This has been developed into a function in the scripts folder, `netcdfify`, that will generate a NetCDF from an input SpatRaster file:
+
+```{r, get_netcdfify}
+source(here("scripts", "netcdfify.R"))
+```
+
+First, read in one of the GeoTIFFs created above:
+```{r, read_beta_total}
+beta_total <- rast(here("maps", "beta_tot_r.tif"))
+```
+
+We can set some global attributes for the output files. This version is for total beta diversity; the relevant entries can be edited for different diversity measures.
+
+```{r, set_global_attrs}
+global_attr <- list(
+  title = "Beta diversity",
+  summary = "Total beta diversity between different time periods based on presence / absence in European macrobenthic communities on a 1 degree grid",                       
+  Conventions = "CF-1.8",
+  # id = "",
+  naming_authority = "emodnet-biology.eu",
+  history = "default",
+  source = "default",
+  # processing_level = "",
+  # comment = "", 
+  # acknowledgment = "",
+  license = "CC-BY",
+  standard_name_vocabulary = "CF Standard Name Table v1.8",
+  date_created = as.character(Sys.Date()),
+  creator_name = "Tom Webb",
+  creator_email = "t.j.webb@sheffield.ac.uk",
+  creator_url = "https://www.sheffield.ac.uk/biosciences/people/academic-staff/tom-webb",
+  institution = "The University of Sheffield",
+  project = "EMODnet-Biology",
+  publisher_name = "EMODnet-Biology",                 
+  publisher_email = "bio@emodnet.eu",                
+  publisher_url = "www.emodnet-biology.eu",                  
+  # geospatial_bounds = "",              
+  # geospatial_bounds_crs = "",          
+  # geospatial_bounds_vertical_crs = "", 
+  geospatial_lat_min = ext(beta_total)[3],
+  geospatial_lat_max = ext(beta_total)[4],
+  geospatial_lon_min = ext(beta_total)[1],
+  geospatial_lon_max = ext(beta_total)[2],
+  # geospatial_vertical_min = "",        
+  # geospatial_vertical_max = "",        
+  # geospatial_vertical_positive = "",  
+  # time_coverage_start = "1911",            
+  # time_coverage_end = "2016",              
+  # time_coverage_duration = "",         
+  # time_coverage_resolution = "",       
+  # uuid = "",                           
+  # sea_name = "",                       
+  # creator_type = "",                   
+  creator_institution = "The University of Sheffield",            
+  # publisher_type = "",                 
+  publisher_institution = "Flanders Marine Institute (VLIZ)",        
+  # program = "",                        
+  # contributor_name = "",               
+  # contributor_role  = "",              
+  geospatial_lat_units = "degrees_north",           
+  geospatial_lon_units = "degrees_east",           
+  # geospatial_vertical_units   = "",    
+  # date_modified = "",               
+  # date_issued = "",                    
+  # date_metadata_modified   = "",       
+  # product_version = "",            
+  # keywords_vocabulary = "",          
+  # platform  = "",              
+  # platform_vocabulary = "",          
+  # instrument = "",          
+  # instrument_vocabulary  = "",        
+  # featureType = "Point",                  
+  # metadata_link = "",                  
+  # references = "",
+  comment = "Uses attributes recommended by http://cfconventions.org",
+  license = "CC-BY", 
+  publisher_name = "EMODnet Biology Data Management Team",
+  citation = "Webb, Tom 2023. Temporal turnover of macrobenthos in European seas.",
+  acknowledgement = "European Marine Observation Data Network (EMODnet) Biology project (EMFF/2019/1.3.1.9/Lot 6/SI2.837974), funded by the European Union under Regulation (EU) No 508/2014 of the European Parliament and of the Council of 15 May 2014 on the European Maritime and Fisheries Fund"
+)
+
+```
+
+To create the NetCDF for total beta diversity, just run the `netcdfify` function:
+```{r, netcdfify_beta_tot}
+netcdfify(focal_rast = beta_total,
+          output_fname = "beta_total",
+          global_atts = global_attr)
+```
+
+For a different diversity measure, first amend the global attributes, then read in the raster and run the function again:
+
+```{r, netcdfify_allrasts}
+global_attr$title <- "Beta diversity_replacement"
+global_attr$summary <- "The fraction of total beta diversity that is due to species replacement between different time periods based on presence / absence in European macrobenthic communities on a 1 degree grid"
+beta_repl <- rast(here("maps", "beta_repl_r.tif"))
+netcdfify(focal_rast = beta_repl,
+          output_fname = "beta_repl",
+          global_atts = global_attr)
+
+global_attr$title <- "Beta diversity_richness"
+global_attr$summary <- "The fraction of total beta diversity that is due to changes in species richness between different time periods based on presence / absence in European macrobenthic communities on a 1 degree grid"
+beta_rich <- rast(here("maps", "beta_rich_r.tif"))
+netcdfify(focal_rast = beta_rich,
+          output_fname = "beta_rich",
+          global_atts = global_attr)
+
+
+global_attr$title <- "Shared species"
+global_attr$summary <- "Number of European macrobenthic species within each 1 degree grid cell that are present in both compared time periods"
+sp_shared <- rast(here("maps", "sp_shared_r.tif"))
+netcdfify(focal_rast = sp_shared,
+          output_fname = "sp_shared",
+          global_atts = global_attr)
+
+global_attr$title <- "Lost species"
+global_attr$summary <- "Number of European macrobenthic species within each 1 degree grid cell that are lost between the first and second time periods under comparison"
+sp_lost <- rast(here("maps", "sp_lost_r.tif"))
+netcdfify(focal_rast = sp_lost,
+          output_fname = "sp_lost",
+          global_atts = global_attr)
+
+global_attr$title <- "Gained species"
+global_attr$summary <- "Number of European macrobenthic species within each 1 degree grid cell that are gained between the first and second time periods under comparison"
+sp_gained <- rast(here("maps", "sp_gained_r.tif"))
+netcdfify(focal_rast = sp_gained,
+          output_fname = "sp_gained",
+          global_atts = global_attr)
+
+global_attr$title <- "Proportion species lost"
+global_attr$summary <- "Proportion of European macrobenthic species within each 1 degree grid cell that are lost between the first and second time periods under comparison"
+p_sp_lost <- rast(here("maps", "p_sp_lost_r.tif"))
+netcdfify(focal_rast = p_sp_lost,
+          output_fname = "p_sp_lost",
+          global_atts = global_attr)
+
+global_attr$title <- "Proportion species gained"
+global_attr$summary <- "Proportion of European macrobenthic species within each 1 degree grid cell that are gained between the first and second time periods under comparison"
+p_sp_gained <- rast(here("maps", "p_sp_gained_r.tif"))
+netcdfify(focal_rast = p_sp_gained,
+          output_fname = "p_sp_gained",
+          global_atts = global_attr)
+
+```
+
+
+### Reproducibility
+<details><summary>Reproducibility receipt</summary>
+```{r, reproducibility, echo = FALSE}
+## datetime
+Sys.time()
+
+## repository
+try(git2r::repository(), silent = TRUE)
+
+## session info
+sessionInfo()
+```
+
 
 ### References
 

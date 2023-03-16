@@ -8,6 +8,9 @@
 # RStudio files
 .Rproj.user/
 
+# Raw data files
+data/raw_data/*.nc
+
 # Rendered reports
 product/*.html
 analysis/*.docx
