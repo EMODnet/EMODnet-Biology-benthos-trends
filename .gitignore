@@ -15,7 +15,7 @@ data/raw_data/*.nc
 product/*.html
 analysis/*.docx
 analysis/*.pdf
-docs/*.html
+#docs/*.html
 docs/*.docx
 docs/*.pdf
 

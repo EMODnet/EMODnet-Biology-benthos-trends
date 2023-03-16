@@ -1,6 +1,6 @@
 netcdfify <- function(focal_rast,
                       output_fname,
-                      output_dir = "data/derived",
+                      output_dir = "product",
                       global_atts){
   
   # focal_rast is the focal raster, in SpatRaster format
@@ -23,7 +23,7 @@ netcdfify <- function(focal_rast,
   output_fname <- paste0(output_fname, ".nc")
   
   # Create nc file
-  nc <- create.nc(here("data/derived", output_fname))
+  nc <- create.nc(here(output_dir, output_fname))
   
   # turn raster to dataframe
   focal_df <- focal_rast %>%
