@@ -25,7 +25,7 @@ library(worrms)
 The main presence-absence dataset is provided as a NetCDF file. This will be served via EMODnet but is accessed locally here. First, establish a connection to the file:
 
 ```{r, open_nc_connection}
-nc_fil <- nc_open(here("data", "EMODnet-Biology-Benthos-European-Seas/Macrobenthos_Eur_Seas_Pres_Abs_v0-4.nc"))
+nc_fil <- nc_open(here("data", "raw_data/Macrobenthos_Eur_Seas_Pres_Abs_v0-4.nc"))
 ```
 
 ### Assembling a data set of unique sampling events
@@ -41,7 +41,7 @@ sample_events <- tibble(
 )
 ```
 
-Note that there are fewer distinct sampling events (`r n_distinct(sample_events)`) than there are total sampling events (`r nrow(sample_events`). Note also that a few sampling events have dates in the future:
+Note that there are fewer distinct sampling events (`r n_distinct(sample_events)`) than there are total sampling events (`r nrow(sample_events)`). Note also that a few sampling events have dates in the future:
 ```{r, future_samples, echo = FALSE}
 sample_events %>% filter(date > lubridate::now())
 ```
@@ -76,7 +76,7 @@ taxo <- aphia_id %>% map_df(get_worms_rank, .progress = TRUE)
 Because this is slow to run, the output was written to file (`write_csv(taxo, file = here("data", "EMODnet-Biology-Benthos-European-Seas/benthos_taxo_rank.csv"))`), so it can simply be read in directly here:
 
 ```{r, read_taxo, message = FALSE}
-taxo <- read_csv(here("data", "EMODnet-Biology-Benthos-European-Seas/benthos_taxo_rank.csv"))
+taxo <- read_csv(here("data", "derived_data/benthos_taxo_rank.csv"))
 ```
 
 What ranks are present?
@@ -155,7 +155,7 @@ get_presabs_sp_summ(sp_index = spp$aphia_index[1])
 
 Run across species and summarise (takes a minute or two to run):
 
-```{r, get_presabs_sunmary_allspp}
+```{r, get_presabs_sunmary_allspp, message = FALSE}
 pres_abs_summ <- spp %>% pull(aphia_index) %>%
   purrr::map(get_presabs_sp_summ, .progress = TRUE) %>%
   bind_rows()
@@ -221,11 +221,11 @@ sample_events <- na_events %>%
 
 ```
 
-This can then be written to file `(write_csv(sample_events, file = here("data", "EMODnet-Biology-Benthos-European-Seas/sample_events.csv"))` allowing the final assembled version of `sample_events` to be read in quickly here:
+This can then be written to file `(write_csv(sample_events, file = here("data", "derived_data/sample_events.csv"))` allowing the final assembled version of `sample_events` to be read in quickly here:
 
 ```{r, read_sample_events}
 sample_events <- read_csv(here("data",
-                               "EMODnet-Biology-Benthos-European-Seas/sample_events.csv"))
+                               "derived_data/sample_events.csv"))
 
 ```
 
@@ -257,7 +257,7 @@ get_presabs_sp_na_rm <- function(sp_index, sp_df = spp, samps = sample_events){
 Run for one species - this needs the `spp` table of species:
 
 ```{r, read_species_list, message = FALSE}
-taxo <- read_csv(here("data", "EMODnet-Biology-Benthos-European-Seas/benthos_taxo_rank.csv"))
+taxo <- read_csv(here("data", "derived_data/benthos_taxo_rank.csv"))
 spp <- taxo %>% 
   filter(rank == "Species") %>% 
   mutate(aphia_index = match(.$AphiaID, taxo$AphiaID))
@@ -270,7 +270,7 @@ get_presabs_sp_na_rm(sp_index = spp$aphia_index[1])
 
 Now run over all species to generate a full dataframe of species presence at each site (excluding sites with NA values) - this takes around 5 minutes:
 
-```{r, get_presabs_sp_na_rm_allspp}
+```{r, get_presabs_sp_na_rm_allspp, message = FALSE}
 
 pres_df <- spp %>% pull(aphia_index) %>%
   purrr::map(get_presabs_sp_na_rm, .progress = TRUE) %>%
@@ -292,11 +292,11 @@ Before closing the nc connection, first extract the Coordinate Reference System:
 presabs_crs <- ncatt_get(nc_fil, "crs")
 ```
 
-Also worth saving the presence data (`pres_df`) to file for direct loading (`write_csv(pres_df, file = here("data", "EMODnet-Biology-Benthos-European-Seas/pres_df.csv"))`) allowing the final presence data frame to be read in quickly here:
+Also worth saving the presence data (`pres_df`) to file for direct loading (`write_csv(pres_df, file = here("data", "derived_data/pres_df.csv"))`) allowing the final presence data frame to be read in quickly here:
 
-```{r, read_pres_df}
+```{r, read_pres_df, eval = FALSE}
 pres_df <- read_csv(here("data",
-                         "EMODnet-Biology-Benthos-European-Seas/pres_df.csv"))
+                         "derived_data/pres_df.csv"))
 
 ```
 
@@ -304,3 +304,23 @@ Finally close the nc connection:
 ```{r, close_nc}
 nc_close(nc_fil)
 ```
+
+The two derived datasets, `sample_events.csv` and `pres_df.csv` are now available in the `data/derived_data` folder for use in calculating temporal turnove metrics as described in `documents/benthos-trends-turnover`.
+
+### Reproducibility
+<details><summary>Reproducibility receipt</summary>
+
+Date of rendering:
+```{r, reproducibility_date, echo = FALSE}
+lubridate::now()
+```
+
+Repository: https://github.com/EMODnet/benthos-trends
+ 
+
+Session info:
+```{r, session_info, echo = FALSE}
+sessionInfo()
+```
+
+

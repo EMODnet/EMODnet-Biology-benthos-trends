@@ -33,13 +33,13 @@ library(vegan)
 library(BAT)
 ```
 
-Read in the datasets of sampling events and species presence that were generated in the previous document:
+Read in the datasets of sampling events and species presence that were generated in the previous document (`benthos-trends-dataprep`):
 
 ```{r, read_data, message = FALSE}
 sample_events <- read_csv(here("data",
-                               "EMODnet-Biology-Benthos-European-Seas/sample_events.csv"))
+                               "derived_data/sample_events.csv"))
 pres_df <- read_csv(here("data",
-                         "EMODnet-Biology-Benthos-European-Seas/pres_df.csv"))
+                         "derived_data/pres_df.csv"))
 ```
 
 To retain all sampling events (including those which do not sample the full benthic community, i.e. which return NA occurrences for some species), first assign the full data set to a new object and then filter to remove events which include NA occurrences:
@@ -421,14 +421,14 @@ p_sp_gained_r <- create_turnover_raster(turnover_metric = "c_prop", create_plot 
 
 Write all of the rasters to file, as GeoTIFFs with LZW compression (set `gdal = "COMPRESS=NONE"` in the call to `writeRaster` if uncompressed files are required). Setting `overwrite = TRUE` means that any existing file of the same name will be overwritten.
 ```{r, write_turnover_tifs}
-writeRaster(beta_tot_r, filename = here("maps", "beta_tot_r.tif"), overwrite = TRUE)
-writeRaster(beta_repl_r, filename = here("maps", "beta_repl_r.tif"), overwrite = TRUE)
-writeRaster(beta_rich_r, filename = here("maps", "beta_rich_r.tif"), overwrite = TRUE)
-writeRaster(sp_shared_r, filename = here("maps", "sp_shared_r.tif"), overwrite = TRUE)
-writeRaster(sp_lost_r, filename = here("maps", "sp_lost_r.tif"), overwrite = TRUE)
-writeRaster(sp_gained_r, filename = here("maps", "sp_gained_r.tif"), overwrite = TRUE)
-writeRaster(p_sp_lost_r, filename = here("maps", "p_sp_lost_r.tif"), overwrite = TRUE)
-writeRaster(p_sp_gained_r, filename = here("maps", "p_sp_gained_r.tif"), overwrite = TRUE)
+writeRaster(beta_tot_r, filename = here("product", "beta_tot_r.tif"), overwrite = TRUE)
+writeRaster(beta_repl_r, filename = here("product", "beta_repl_r.tif"), overwrite = TRUE)
+writeRaster(beta_rich_r, filename = here("product", "beta_rich_r.tif"), overwrite = TRUE)
+writeRaster(sp_shared_r, filename = here("product", "sp_shared_r.tif"), overwrite = TRUE)
+writeRaster(sp_lost_r, filename = here("product", "sp_lost_r.tif"), overwrite = TRUE)
+writeRaster(sp_gained_r, filename = here("product", "sp_gained_r.tif"), overwrite = TRUE)
+writeRaster(p_sp_lost_r, filename = here("product", "p_sp_lost_r.tif"), overwrite = TRUE)
+writeRaster(p_sp_gained_r, filename = here("product", "p_sp_gained_r.tif"), overwrite = TRUE)
 ```
 
 To create the NetCDF versions, we adapt the EMODnet guide to creating NetCDF files from https://emodnet.github.io/EMODnet-Biology-products-erddap-demo/. This has been developed into a function in the scripts folder, `netcdfify`, that will generate a NetCDF from an input SpatRaster file:
@@ -439,7 +439,7 @@ source(here("scripts", "netcdfify.R"))
 
 First, read in one of the GeoTIFFs created above:
 ```{r, read_beta_total}
-beta_total <- rast(here("maps", "beta_tot_r.tif"))
+beta_total <- rast(here("product", "beta_tot_r.tif"))
 ```
 
 We can set some global attributes for the output files. This version is for total beta diversity; the relevant entries can be edited for different diversity measures.
@@ -451,8 +451,8 @@ global_attr <- list(
   Conventions = "CF-1.8",
   # id = "",
   naming_authority = "emodnet-biology.eu",
-  history = "default",
-  source = "default",
+  history = "https://github.com/EMODnet/benthos-trends",
+  source = "https://github.com/EMODnet/benthos-trends",
   # processing_level = "",
   # comment = "", 
   # acknowledgment = "",
@@ -508,7 +508,7 @@ global_attr <- list(
   comment = "Uses attributes recommended by http://cfconventions.org",
   license = "CC-BY", 
   publisher_name = "EMODnet Biology Data Management Team",
-  citation = "Webb, Tom 2023. Temporal turnover of macrobenthos in European seas.",
+  citation = "Webb, T.J. (2023). Temporal turnover of macrobenthos in European seas.",
   acknowledgement = "European Marine Observation Data Network (EMODnet) Biology project (EMFF/2019/1.3.1.9/Lot 6/SI2.837974), funded by the European Union under Regulation (EU) No 508/2014 of the European Parliament and of the Council of 15 May 2014 on the European Maritime and Fisheries Fund"
 )
 
@@ -526,14 +526,14 @@ For a different diversity measure, first amend the global attributes, then read 
 ```{r, netcdfify_allrasts}
 global_attr$title <- "Beta diversity_replacement"
 global_attr$summary <- "The fraction of total beta diversity that is due to species replacement between different time periods based on presence / absence in European macrobenthic communities on a 1 degree grid"
-beta_repl <- rast(here("maps", "beta_repl_r.tif"))
+beta_repl <- rast(here("product", "beta_repl_r.tif"))
 netcdfify(focal_rast = beta_repl,
           output_fname = "beta_repl",
           global_atts = global_attr)
 
 global_attr$title <- "Beta diversity_richness"
 global_attr$summary <- "The fraction of total beta diversity that is due to changes in species richness between different time periods based on presence / absence in European macrobenthic communities on a 1 degree grid"
-beta_rich <- rast(here("maps", "beta_rich_r.tif"))
+beta_rich <- rast(here("product", "beta_rich_r.tif"))
 netcdfify(focal_rast = beta_rich,
           output_fname = "beta_rich",
           global_atts = global_attr)
@@ -541,52 +541,53 @@ netcdfify(focal_rast = beta_rich,
 
 global_attr$title <- "Shared species"
 global_attr$summary <- "Number of European macrobenthic species within each 1 degree grid cell that are present in both compared time periods"
-sp_shared <- rast(here("maps", "sp_shared_r.tif"))
+sp_shared <- rast(here("product", "sp_shared_r.tif"))
 netcdfify(focal_rast = sp_shared,
           output_fname = "sp_shared",
           global_atts = global_attr)
 
 global_attr$title <- "Lost species"
 global_attr$summary <- "Number of European macrobenthic species within each 1 degree grid cell that are lost between the first and second time periods under comparison"
-sp_lost <- rast(here("maps", "sp_lost_r.tif"))
+sp_lost <- rast(here("product", "sp_lost_r.tif"))
 netcdfify(focal_rast = sp_lost,
           output_fname = "sp_lost",
           global_atts = global_attr)
 
 global_attr$title <- "Gained species"
 global_attr$summary <- "Number of European macrobenthic species within each 1 degree grid cell that are gained between the first and second time periods under comparison"
-sp_gained <- rast(here("maps", "sp_gained_r.tif"))
+sp_gained <- rast(here("product", "sp_gained_r.tif"))
 netcdfify(focal_rast = sp_gained,
           output_fname = "sp_gained",
           global_atts = global_attr)
 
 global_attr$title <- "Proportion species lost"
 global_attr$summary <- "Proportion of European macrobenthic species within each 1 degree grid cell that are lost between the first and second time periods under comparison"
-p_sp_lost <- rast(here("maps", "p_sp_lost_r.tif"))
+p_sp_lost <- rast(here("product", "p_sp_lost_r.tif"))
 netcdfify(focal_rast = p_sp_lost,
           output_fname = "p_sp_lost",
           global_atts = global_attr)
 
 global_attr$title <- "Proportion species gained"
 global_attr$summary <- "Proportion of European macrobenthic species within each 1 degree grid cell that are gained between the first and second time periods under comparison"
-p_sp_gained <- rast(here("maps", "p_sp_gained_r.tif"))
+p_sp_gained <- rast(here("product", "p_sp_gained_r.tif"))
 netcdfify(focal_rast = p_sp_gained,
           output_fname = "p_sp_gained",
           global_atts = global_attr)
 
 ```
 
-
 ### Reproducibility
 <details><summary>Reproducibility receipt</summary>
-```{r, reproducibility, echo = FALSE}
-## datetime
-Sys.time()
 
-## repository
-try(git2r::repository(), silent = TRUE)
-
-## session info
-sessionInfo()
+Date of rendering:
+```{r, reproducibility_date, echo = FALSE}
+lubridate::now()
 ```
 
+Repository: https://github.com/EMODnet/benthos-trends
+ 
+
+Session info:
+```{r, session_info, echo = FALSE}
+sessionInfo()
+```
