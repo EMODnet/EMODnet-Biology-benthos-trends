@@ -1,5 +1,6 @@
 netcdfify <- function(focal_rast,
                       output_fname,
+                      add_measure_name = TRUE,
                       output_dir = "product",
                       global_atts){
   
@@ -15,8 +16,9 @@ netcdfify <- function(focal_rast,
   require(terra)
   require(RNetCDF)
   
-  # add diversity variable to names of raster layers and clean names
-  names(focal_rast) <- paste(output_fname, names(focal_rast))
+  # add diversity variable to names of raster layers (if required) and clean names
+  if(add_measure_name == TRUE){
+    names(focal_rast) <- paste(output_fname, names(focal_rast))}
   focal_rast <- focal_rast %>% janitor::clean_names()
   
   # create full filename of output file

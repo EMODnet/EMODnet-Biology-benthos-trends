@@ -437,17 +437,73 @@ To create the NetCDF versions, we adapt the EMODnet guide to creating NetCDF fil
 source(here("scripts", "netcdfify.R"))
 ```
 
-First, read in one of the GeoTIFFs created above:
-```{r, read_beta_total}
+First, read in the GeoTIFFs created above:
+```{r, read_diveristy_rasters}
 beta_total <- rast(here("product", "beta_tot_r.tif"))
+beta_repl <- rast(here("product", "beta_repl_r.tif"))
+beta_rich <- rast(here("product", "beta_rich_r.tif"))
+sp_shared <- rast(here("product", "sp_shared_r.tif"))
+sp_lost <- rast(here("product", "sp_lost_r.tif"))
+sp_gained <- rast(here("product", "sp_gained_r.tif"))
+p_sp_lost <- rast(here("product", "p_sp_lost_r.tif"))
+p_sp_gained <- rast(here("product", "p_sp_gained_r.tif"))
+
 ```
 
-We can set some global attributes for the output files. This version is for total beta diversity; the relevant entries can be edited for different diversity measures.
+Because these will all be combined, we add the diveristy measure as a prefix to the layer names in each raster:
+
+```{r, add_layername_prefix}
+names(beta_total) <- paste0("beta_total_", names(beta_total))
+names(beta_repl) <- paste0("beta_repl_", names(beta_repl))
+names(beta_rich) <- paste0("beta_rich_", names(beta_rich))
+names(sp_shared) <- paste0("sp_shared_", names(sp_shared))
+names(sp_lost) <- paste0("sp_lost_", names(sp_lost))
+names(sp_gained) <- paste0("sp_gained_", names(sp_gained))
+names(p_sp_lost) <- paste0("p_sp_lost_", names(p_sp_lost))
+names(p_sp_gained) <- paste0("p_sp_gained_", names(p_sp_gained))
+
+```
+
+Then combine the rasters into a single raster with 120 layers, one for each combination of diversity measure and time comparison:
+```{r, combine_rasters}
+all_measures_r <- c(
+  beta_total, beta_repl, beta_rich,
+  sp_shared, sp_lost, sp_gained,
+  p_sp_lost, p_sp_gained
+)
+
+```
+
+Write this to file as an single GeoTiff version of the product:
+```{r, write_all_measures_tiff}
+writeRaster(all_measures_r,
+            filename = here("product", "all_diversity_measures.tif"),
+            overwrite = TRUE)
+
+```
+
+It's also useful to know the min and max values of each layer. This is done here, and written to file as a simple dataframe with a min and max value for each diveristy measure x time comparison combination:
+
+```{r}
+all_measures_minmax <- all_measures_r %>% 
+  minmax() %>% 
+  as_tibble() %>% 
+  mutate(value = c("min", "max")) %>% 
+  select(value, everything()) %>% 
+  pivot_longer(cols = -value, names_to = "diversity_measure", values_to = "val") %>% 
+  pivot_wider(names_from = value, values_from = val)
+
+write_csv(all_measures_minmax,
+          here::here("data", "derived_data/all_measures_minmax.csv"))
+
+```
+
+We can set some global attributes for the output NetCDF file. This version is for all measures together. It could be adapted to create files for individual diversity measures if required.
 
 ```{r, set_global_attrs}
 global_attr <- list(
-  title = "Beta diversity",
-  summary = "Total beta diversity between different time periods based on presence / absence in European macrobenthic communities on a 1 degree grid",                       
+  title = "Diversity_measures",
+  summary = "Eight measures of changes in species compositions of European macrobenthic communities between different time periods based on presence / absence in  on a 1 degree grid",                       
   Conventions = "CF-1.8",
   # id = "",
   naming_authority = "emodnet-biology.eu",
@@ -470,10 +526,10 @@ global_attr <- list(
   # geospatial_bounds = "",              
   # geospatial_bounds_crs = "",          
   # geospatial_bounds_vertical_crs = "", 
-  geospatial_lat_min = ext(beta_total)[3],
-  geospatial_lat_max = ext(beta_total)[4],
-  geospatial_lon_min = ext(beta_total)[1],
-  geospatial_lon_max = ext(beta_total)[2],
+  geospatial_lat_min = ext(all_measures_r)[3],
+  geospatial_lat_max = ext(all_measures_r)[4],
+  geospatial_lon_min = ext(all_measures_r)[1],
+  geospatial_lon_max = ext(all_measures_r)[2],
   # geospatial_vertical_min = "",        
   # geospatial_vertical_max = "",        
   # geospatial_vertical_positive = "",  
@@ -514,66 +570,24 @@ global_attr <- list(
 
 ```
 
-To create the NetCDF for total beta diversity, just run the `netcdfify` function:
-```{r, netcdfify_beta_tot}
-netcdfify(focal_rast = beta_total,
-          output_fname = "beta_total",
+To create the NetCDF for total beta diversity, just run the `netcdfify` function (setting `add_measure_name` to FALSE because our layers already include the diversity measure prefix):
+```{r, netcdfify_all_measures}
+netcdfify(focal_rast = all_measures_r,
+          output_fname = "all_diversity_measures",
+          add_measure_name = FALSE,
           global_atts = global_attr)
 ```
 
-For a different diversity measure, first amend the global attributes, then read in the raster and run the function again:
+For completeness, this shows how to creat a NetCDF file for a single diversity measure, here `beta_total`:
 
-```{r, netcdfify_allrasts}
-global_attr$title <- "Beta diversity_replacement"
-global_attr$summary <- "The fraction of total beta diversity that is due to species replacement between different time periods based on presence / absence in European macrobenthic communities on a 1 degree grid"
-beta_repl <- rast(here("product", "beta_repl_r.tif"))
-netcdfify(focal_rast = beta_repl,
-          output_fname = "beta_repl",
+```{r, netcdfify_single_measure}
+global_attr$title <- "Beta diversity"
+global_attr$summary <- "Total beta diversity between different time periods based on presence / absence in European macrobenthic communities on a 1 degree grid"
+beta_total <- rast(here("product", "beta_tot_r.tif"))
+netcdfify(focal_rast = beta_total,
+          output_fname = "beta_total",
+          add_measure_name = TRUE,
           global_atts = global_attr)
-
-global_attr$title <- "Beta diversity_richness"
-global_attr$summary <- "The fraction of total beta diversity that is due to changes in species richness between different time periods based on presence / absence in European macrobenthic communities on a 1 degree grid"
-beta_rich <- rast(here("product", "beta_rich_r.tif"))
-netcdfify(focal_rast = beta_rich,
-          output_fname = "beta_rich",
-          global_atts = global_attr)
-
-
-global_attr$title <- "Shared species"
-global_attr$summary <- "Number of European macrobenthic species within each 1 degree grid cell that are present in both compared time periods"
-sp_shared <- rast(here("product", "sp_shared_r.tif"))
-netcdfify(focal_rast = sp_shared,
-          output_fname = "sp_shared",
-          global_atts = global_attr)
-
-global_attr$title <- "Lost species"
-global_attr$summary <- "Number of European macrobenthic species within each 1 degree grid cell that are lost between the first and second time periods under comparison"
-sp_lost <- rast(here("product", "sp_lost_r.tif"))
-netcdfify(focal_rast = sp_lost,
-          output_fname = "sp_lost",
-          global_atts = global_attr)
-
-global_attr$title <- "Gained species"
-global_attr$summary <- "Number of European macrobenthic species within each 1 degree grid cell that are gained between the first and second time periods under comparison"
-sp_gained <- rast(here("product", "sp_gained_r.tif"))
-netcdfify(focal_rast = sp_gained,
-          output_fname = "sp_gained",
-          global_atts = global_attr)
-
-global_attr$title <- "Proportion species lost"
-global_attr$summary <- "Proportion of European macrobenthic species within each 1 degree grid cell that are lost between the first and second time periods under comparison"
-p_sp_lost <- rast(here("product", "p_sp_lost_r.tif"))
-netcdfify(focal_rast = p_sp_lost,
-          output_fname = "p_sp_lost",
-          global_atts = global_attr)
-
-global_attr$title <- "Proportion species gained"
-global_attr$summary <- "Proportion of European macrobenthic species within each 1 degree grid cell that are gained between the first and second time periods under comparison"
-p_sp_gained <- rast(here("product", "p_sp_gained_r.tif"))
-netcdfify(focal_rast = p_sp_gained,
-          output_fname = "p_sp_gained",
-          global_atts = global_attr)
-
 ```
 
 ### Reproducibility
