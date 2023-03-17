@@ -871,14 +871,55 @@ This has been developed into a function in the scripts folder,
 <code>netcdfify</code>, that will generate a NetCDF from an input
 SpatRaster file:</p>
 <pre class="r"><code>source(here(&quot;scripts&quot;, &quot;netcdfify.R&quot;))</code></pre>
-<p>First, read in one of the GeoTIFFs created above:</p>
-<pre class="r"><code>beta_total &lt;- rast(here(&quot;product&quot;, &quot;beta_tot_r.tif&quot;))</code></pre>
-<p>We can set some global attributes for the output files. This version
-is for total beta diversity; the relevant entries can be edited for
-different diversity measures.</p>
+<p>First, read in the GeoTIFFs created above:</p>
+<pre class="r"><code>beta_total &lt;- rast(here(&quot;product&quot;, &quot;beta_tot_r.tif&quot;))
+beta_repl &lt;- rast(here(&quot;product&quot;, &quot;beta_repl_r.tif&quot;))
+beta_rich &lt;- rast(here(&quot;product&quot;, &quot;beta_rich_r.tif&quot;))
+sp_shared &lt;- rast(here(&quot;product&quot;, &quot;sp_shared_r.tif&quot;))
+sp_lost &lt;- rast(here(&quot;product&quot;, &quot;sp_lost_r.tif&quot;))
+sp_gained &lt;- rast(here(&quot;product&quot;, &quot;sp_gained_r.tif&quot;))
+p_sp_lost &lt;- rast(here(&quot;product&quot;, &quot;p_sp_lost_r.tif&quot;))
+p_sp_gained &lt;- rast(here(&quot;product&quot;, &quot;p_sp_gained_r.tif&quot;))</code></pre>
+<p>Because these will all be combined, we add the diveristy measure as a
+prefix to the layer names in each raster:</p>
+<pre class="r"><code>names(beta_total) &lt;- paste0(&quot;beta_total_&quot;, names(beta_total))
+names(beta_repl) &lt;- paste0(&quot;beta_repl_&quot;, names(beta_repl))
+names(beta_rich) &lt;- paste0(&quot;beta_rich_&quot;, names(beta_rich))
+names(sp_shared) &lt;- paste0(&quot;sp_shared_&quot;, names(sp_shared))
+names(sp_lost) &lt;- paste0(&quot;sp_lost_&quot;, names(sp_lost))
+names(sp_gained) &lt;- paste0(&quot;sp_gained_&quot;, names(sp_gained))
+names(p_sp_lost) &lt;- paste0(&quot;p_sp_lost_&quot;, names(p_sp_lost))
+names(p_sp_gained) &lt;- paste0(&quot;p_sp_gained_&quot;, names(p_sp_gained))</code></pre>
+<p>Then combine the rasters into a single raster with 120 layers, one
+for each combination of diversity measure and time comparison:</p>
+<pre class="r"><code>all_measures_r &lt;- c(
+  beta_total, beta_repl, beta_rich,
+  sp_shared, sp_lost, sp_gained,
+  p_sp_lost, p_sp_gained
+)</code></pre>
+<p>Write this to file as an single GeoTiff version of the product:</p>
+<pre class="r"><code>writeRaster(all_measures_r,
+            filename = here(&quot;product&quot;, &quot;all_diversity_measures.tif&quot;),
+            overwrite = TRUE)</code></pre>
+<p>It’s also useful to know the min and max values of each layer. This
+is done here, and written to file as a simple dataframe with a min and
+max value for each diveristy measure x time comparison combination:</p>
+<pre class="r"><code>all_measures_minmax &lt;- all_measures_r %&gt;% 
+  minmax() %&gt;% 
+  as_tibble() %&gt;% 
+  mutate(value = c(&quot;min&quot;, &quot;max&quot;)) %&gt;% 
+  select(value, everything()) %&gt;% 
+  pivot_longer(cols = -value, names_to = &quot;diversity_measure&quot;, values_to = &quot;val&quot;) %&gt;% 
+  pivot_wider(names_from = value, values_from = val)
+
+write_csv(all_measures_minmax,
+          here::here(&quot;data&quot;, &quot;derived_data/all_measures_minmax.csv&quot;))</code></pre>
+<p>We can set some global attributes for the output NetCDF file. This
+version is for all measures together. It could be adapted to create
+files for individual diversity measures if required.</p>
 <pre class="r"><code>global_attr &lt;- list(
-  title = &quot;Beta diversity&quot;,
-  summary = &quot;Total beta diversity between different time periods based on presence / absence in European macrobenthic communities on a 1 degree grid&quot;,                       
+  title = &quot;Diversity_measures&quot;,
+  summary = &quot;Eight measures of changes in species compositions of European macrobenthic communities between different time periods based on presence / absence in  on a 1 degree grid&quot;,                       
   Conventions = &quot;CF-1.8&quot;,
   # id = &quot;&quot;,
   naming_authority = &quot;emodnet-biology.eu&quot;,
@@ -901,10 +942,10 @@ different diversity measures.</p>
   # geospatial_bounds = &quot;&quot;,              
   # geospatial_bounds_crs = &quot;&quot;,          
   # geospatial_bounds_vertical_crs = &quot;&quot;, 
-  geospatial_lat_min = ext(beta_total)[3],
-  geospatial_lat_max = ext(beta_total)[4],
-  geospatial_lon_min = ext(beta_total)[1],
-  geospatial_lon_max = ext(beta_total)[2],
+  geospatial_lat_min = ext(all_measures_r)[3],
+  geospatial_lat_max = ext(all_measures_r)[4],
+  geospatial_lon_min = ext(all_measures_r)[1],
+  geospatial_lon_max = ext(all_measures_r)[2],
   # geospatial_vertical_min = &quot;&quot;,        
   # geospatial_vertical_max = &quot;&quot;,        
   # geospatial_vertical_positive = &quot;&quot;,  
@@ -943,60 +984,21 @@ different diversity measures.</p>
   acknowledgement = &quot;European Marine Observation Data Network (EMODnet) Biology project (EMFF/2019/1.3.1.9/Lot 6/SI2.837974), funded by the European Union under Regulation (EU) No 508/2014 of the European Parliament and of the Council of 15 May 2014 on the European Maritime and Fisheries Fund&quot;
 )</code></pre>
 <p>To create the NetCDF for total beta diversity, just run the
-<code>netcdfify</code> function:</p>
-<pre class="r"><code>netcdfify(focal_rast = beta_total,
-          output_fname = &quot;beta_total&quot;,
+<code>netcdfify</code> function (setting <code>add_measure_name</code>
+to FALSE because our layers already include the diversity measure
+prefix):</p>
+<pre class="r"><code>netcdfify(focal_rast = all_measures_r,
+          output_fname = &quot;all_diversity_measures&quot;,
+          add_measure_name = FALSE,
           global_atts = global_attr)</code></pre>
-<p>For a different diversity measure, first amend the global attributes,
-then read in the raster and run the function again:</p>
-<pre class="r"><code>global_attr$title &lt;- &quot;Beta diversity_replacement&quot;
-global_attr$summary &lt;- &quot;The fraction of total beta diversity that is due to species replacement between different time periods based on presence / absence in European macrobenthic communities on a 1 degree grid&quot;
-beta_repl &lt;- rast(here(&quot;product&quot;, &quot;beta_repl_r.tif&quot;))
-netcdfify(focal_rast = beta_repl,
-          output_fname = &quot;beta_repl&quot;,
-          global_atts = global_attr)
-
-global_attr$title &lt;- &quot;Beta diversity_richness&quot;
-global_attr$summary &lt;- &quot;The fraction of total beta diversity that is due to changes in species richness between different time periods based on presence / absence in European macrobenthic communities on a 1 degree grid&quot;
-beta_rich &lt;- rast(here(&quot;product&quot;, &quot;beta_rich_r.tif&quot;))
-netcdfify(focal_rast = beta_rich,
-          output_fname = &quot;beta_rich&quot;,
-          global_atts = global_attr)
-
-
-global_attr$title &lt;- &quot;Shared species&quot;
-global_attr$summary &lt;- &quot;Number of European macrobenthic species within each 1 degree grid cell that are present in both compared time periods&quot;
-sp_shared &lt;- rast(here(&quot;product&quot;, &quot;sp_shared_r.tif&quot;))
-netcdfify(focal_rast = sp_shared,
-          output_fname = &quot;sp_shared&quot;,
-          global_atts = global_attr)
-
-global_attr$title &lt;- &quot;Lost species&quot;
-global_attr$summary &lt;- &quot;Number of European macrobenthic species within each 1 degree grid cell that are lost between the first and second time periods under comparison&quot;
-sp_lost &lt;- rast(here(&quot;product&quot;, &quot;sp_lost_r.tif&quot;))
-netcdfify(focal_rast = sp_lost,
-          output_fname = &quot;sp_lost&quot;,
-          global_atts = global_attr)
-
-global_attr$title &lt;- &quot;Gained species&quot;
-global_attr$summary &lt;- &quot;Number of European macrobenthic species within each 1 degree grid cell that are gained between the first and second time periods under comparison&quot;
-sp_gained &lt;- rast(here(&quot;product&quot;, &quot;sp_gained_r.tif&quot;))
-netcdfify(focal_rast = sp_gained,
-          output_fname = &quot;sp_gained&quot;,
-          global_atts = global_attr)
-
-global_attr$title &lt;- &quot;Proportion species lost&quot;
-global_attr$summary &lt;- &quot;Proportion of European macrobenthic species within each 1 degree grid cell that are lost between the first and second time periods under comparison&quot;
-p_sp_lost &lt;- rast(here(&quot;product&quot;, &quot;p_sp_lost_r.tif&quot;))
-netcdfify(focal_rast = p_sp_lost,
-          output_fname = &quot;p_sp_lost&quot;,
-          global_atts = global_attr)
-
-global_attr$title &lt;- &quot;Proportion species gained&quot;
-global_attr$summary &lt;- &quot;Proportion of European macrobenthic species within each 1 degree grid cell that are gained between the first and second time periods under comparison&quot;
-p_sp_gained &lt;- rast(here(&quot;product&quot;, &quot;p_sp_gained_r.tif&quot;))
-netcdfify(focal_rast = p_sp_gained,
-          output_fname = &quot;p_sp_gained&quot;,
+<p>For completeness, this shows how to creat a NetCDF file for a single
+diversity measure, here <code>beta_total</code>:</p>
+<pre class="r"><code>global_attr$title &lt;- &quot;Beta diversity&quot;
+global_attr$summary &lt;- &quot;Total beta diversity between different time periods based on presence / absence in European macrobenthic communities on a 1 degree grid&quot;
+beta_total &lt;- rast(here(&quot;product&quot;, &quot;beta_tot_r.tif&quot;))
+netcdfify(focal_rast = beta_total,
+          output_fname = &quot;beta_total&quot;,
+          add_measure_name = TRUE,
           global_atts = global_attr)</code></pre>
 <div id="reproducibility" class="section level3">
 <h3>Reproducibility</h3>
@@ -1005,7 +1007,7 @@ netcdfify(focal_rast = p_sp_gained,
 Reproducibility receipt
 </summary>
 <p>Date of rendering:</p>
-<pre><code>## [1] &quot;2023-03-16 20:42:10 GMT&quot;</code></pre>
+<pre><code>## [1] &quot;2023-03-17 15:48:55 GMT&quot;</code></pre>
 <p>Repository: <a href="https://github.com/EMODnet/benthos-trends" class="uri">https://github.com/EMODnet/benthos-trends</a></p>
 <p>Session info:</p>
 <pre><code>## R version 4.2.2 (2022-10-31)
@@ -1022,56 +1024,53 @@ Reproducibility receipt
 ## [1] stats     graphics  grDevices utils     datasets  methods   base     
 ## 
 ## other attached packages:
-##  [1] vegan_2.6-4         lattice_0.20-45     permute_0.9-7       RNetCDF_2.6-2      
-##  [5] rnaturalearth_0.3.2 tidyterra_0.3.2     terra_1.7-3         sf_1.0-9           
-##  [9] biscale_1.0.0       viridis_0.6.2       viridisLite_0.4.1   janitor_2.2.0      
-## [13] worrms_0.4.2        ncdf4_1.21          lubridate_1.9.2     forcats_1.0.0      
+##  [1] BAT_2.9.2           vegan_2.6-4         lattice_0.20-45     permute_0.9-7      
+##  [5] RNetCDF_2.6-2       rnaturalearth_0.3.2 tidyterra_0.3.2     terra_1.7-3        
+##  [9] sf_1.0-9            biscale_1.0.0       viridis_0.6.2       viridisLite_0.4.1  
+## [13] janitor_2.2.0       here_1.0.1          lubridate_1.9.2     forcats_1.0.0      
 ## [17] stringr_1.5.0       dplyr_1.1.0         purrr_1.0.1         readr_2.1.4        
 ## [21] tidyr_1.3.0         tibble_3.1.8        ggplot2_3.4.1       tidyverse_2.0.0    
-## [25] here_1.0.1          BAT_2.9.2          
 ## 
 ## loaded via a namespace (and not attached):
-##   [1] plyr_1.8.8              sp_1.6-0                splines_4.2.2          
-##   [4] listenv_0.9.0           usethis_2.1.6.9000      urltools_1.7.3         
-##   [7] digest_0.6.31           foreach_1.5.2           htmltools_0.5.4        
-##  [10] fansi_1.0.4             magrittr_2.0.3          cluster_2.1.4          
-##  [13] doParallel_1.0.17       ks_1.14.0               tzdb_0.3.0             
-##  [16] recipes_1.0.5           globals_0.16.2          fastcluster_1.2.3      
-##  [19] gower_1.0.1             vroom_1.6.1             hardhat_1.2.0          
-##  [22] timechange_0.2.0        pdist_1.2.1             prettyunits_1.1.1      
-##  [25] colorspace_2.1-0        xfun_0.37               rgdal_1.6-4            
-##  [28] crayon_1.5.2            jsonlite_1.8.4          survival_3.4-0         
-##  [31] iterators_1.0.14        ape_5.7                 glue_1.6.2             
-##  [34] gtable_0.3.1            ipred_0.9-13            future.apply_1.10.0    
-##  [37] maps_3.4.1              abind_1.4-5             scales_1.2.1           
-##  [40] mvtnorm_1.1-3           DBI_1.1.3               Rcpp_1.0.10            
-##  [43] progress_1.2.2          palmerpenguins_0.1.1    magic_1.6-1            
-##  [46] units_0.8-1             bit_4.0.5               proxy_0.4-27           
-##  [49] mclust_6.0.0            stats4_4.2.2            lava_1.7.1             
-##  [52] prodlim_2019.11.13      httr_1.4.4              ellipsis_0.3.2         
-##  [55] pkgconfig_2.0.3         farver_2.1.1            nnet_7.3-18            
-##  [58] sass_0.4.5              utf8_1.2.3              crul_1.3               
-##  [61] caret_6.0-93            tidyselect_1.2.0        labeling_0.4.2         
-##  [64] rlang_1.0.6             reshape2_1.4.4          munsell_0.5.0          
-##  [67] tools_4.2.2             cachem_1.0.6            cli_3.6.0              
-##  [70] generics_0.1.3          evaluate_0.20           geometry_0.4.7         
-##  [73] fastmap_1.1.0           yaml_2.3.7              fs_1.6.1               
-##  [76] ModelMetrics_1.2.2.2    knitr_1.42              bit64_4.0.5            
-##  [79] future_1.31.0           nlme_3.1-160            pracma_2.4.2           
-##  [82] compiler_4.2.2          rstudioapi_0.14         curl_5.0.0             
-##  [85] e1071_1.7-13            bslib_0.4.2             stringi_1.7.12         
-##  [88] highr_0.10              rgeos_0.6-1             Matrix_1.5-1           
-##  [91] classInt_0.4-8          vctrs_0.5.2             pillar_1.8.1           
-##  [94] lifecycle_1.0.3         triebeard_0.3.0         jquerylib_0.1.4        
-##  [97] data.table_1.14.8       raster_3.6-14           R6_2.5.1               
-## [100] KernSmooth_2.23-20      gridExtra_2.3           parallelly_1.34.0      
-## [103] codetools_0.2-18        MASS_7.3-58.1           proto_1.0.0            
-## [106] rprojroot_2.0.3         withr_2.5.0             httpcode_0.3.0         
-## [109] mgcv_1.8-41             parallel_4.2.2          hms_1.1.2              
-## [112] grid_4.2.2              rpart_4.1.19            timeDate_4022.108      
-## [115] rnaturalearthdata_0.1.0 class_7.3-20            rmarkdown_2.20         
-## [118] nls2_0.3-3              snakecase_0.11.0        hypervolume_3.1.0      
-## [121] git2r_0.31.0            pROC_1.18.0</code></pre>
+##   [1] backports_1.4.1         plyr_1.8.8              sp_1.6-0               
+##   [4] splines_4.2.2           listenv_0.9.0           digest_0.6.31          
+##   [7] foreach_1.5.2           htmltools_0.5.4         fansi_1.0.4            
+##  [10] magrittr_2.0.3          cluster_2.1.4           doParallel_1.0.17      
+##  [13] ks_1.14.0               tzdb_0.3.0              recipes_1.0.5          
+##  [16] globals_0.16.2          fastcluster_1.2.3       gower_1.0.1            
+##  [19] vroom_1.6.1             hardhat_1.2.0           timechange_0.2.0       
+##  [22] pdist_1.2.1             prettyunits_1.1.1       colorspace_2.1-0       
+##  [25] xfun_0.37               rgdal_1.6-4             crayon_1.5.2           
+##  [28] jsonlite_1.8.4          survival_3.4-0          iterators_1.0.14       
+##  [31] ape_5.7                 glue_1.6.2              gtable_0.3.1           
+##  [34] ipred_0.9-13            future.apply_1.10.0     maps_3.4.1             
+##  [37] abind_1.4-5             scales_1.2.1            mvtnorm_1.1-3          
+##  [40] DBI_1.1.3               Rcpp_1.0.10             progress_1.2.2         
+##  [43] palmerpenguins_0.1.1    magic_1.6-1             units_0.8-1            
+##  [46] bit_4.0.5               proxy_0.4-27            mclust_6.0.0           
+##  [49] stats4_4.2.2            lava_1.7.1              prodlim_2019.11.13     
+##  [52] httr_1.4.4              ellipsis_0.3.2          farver_2.1.1           
+##  [55] pkgconfig_2.0.3         nnet_7.3-18             sass_0.4.5             
+##  [58] utf8_1.2.3              caret_6.0-93            tidyselect_1.2.0       
+##  [61] labeling_0.4.2          rlang_1.0.6             reshape2_1.4.4         
+##  [64] munsell_0.5.0           tools_4.2.2             cachem_1.0.6           
+##  [67] cli_3.6.0               generics_0.1.3          broom_1.0.3            
+##  [70] evaluate_0.20           geometry_0.4.7          fastmap_1.1.0          
+##  [73] yaml_2.3.7              ModelMetrics_1.2.2.2    knitr_1.42             
+##  [76] bit64_4.0.5             future_1.31.0           nlme_3.1-160           
+##  [79] pracma_2.4.2            compiler_4.2.2          rstudioapi_0.14        
+##  [82] e1071_1.7-13            bslib_0.4.2             stringi_1.7.12         
+##  [85] highr_0.10              rgeos_0.6-1             Matrix_1.5-1           
+##  [88] classInt_0.4-8          vctrs_0.5.2             pillar_1.8.1           
+##  [91] lifecycle_1.0.3         jquerylib_0.1.4         data.table_1.14.8      
+##  [94] raster_3.6-14           R6_2.5.1                KernSmooth_2.23-20     
+##  [97] gridExtra_2.3           parallelly_1.34.0       codetools_0.2-18       
+## [100] MASS_7.3-58.1           proto_1.0.0             rprojroot_2.0.3        
+## [103] withr_2.5.0             mgcv_1.8-41             parallel_4.2.2         
+## [106] hms_1.1.2               grid_4.2.2              rpart_4.1.19           
+## [109] timeDate_4022.108       rnaturalearthdata_0.1.0 class_7.3-20           
+## [112] rmarkdown_2.20          nls2_0.3-3              snakecase_0.11.0       
+## [115] hypervolume_3.1.0       pROC_1.18.0</code></pre>
 </div>
 </div>
 
