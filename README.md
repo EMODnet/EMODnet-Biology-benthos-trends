@@ -43,7 +43,7 @@ Gridded estimates of each diversity measure are produced in R ([R Core Team 2022
 
 ## More information:
 
-The full workflow for deriving the products from the datasets derived from the European presence/absence data product is set out in `docs/benthos-trends-turnover`.
+The full workflow for deriving the products from the datasets derived from the European presence/absence data product is set out in https://emodnet.github.io/EMODnet-Biology-benthos-trends/ (source markdown documents are also available in the analysis folder of this repository).
 
 ### References
 
