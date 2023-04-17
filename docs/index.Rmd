@@ -1,0 +1,14 @@
+---
+title: "index"
+author: "Tom Webb"
+date: "2023-04-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Test
+
+Checking if GitHub pages works for html rendering.
