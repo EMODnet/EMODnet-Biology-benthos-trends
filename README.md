@@ -71,7 +71,13 @@ Webb, T.J. (2023) _Temporal turnover of macrobenthos in European seas_. Integrat
 
 Available to download in:
 
-https://www.vliz.be/imis?dasid=8229
+[EMODnet catalogue](https://emodnet.ec.europa.eu/geonetwork/srv/eng/catalog.search#/metadata/a4c65c9b64d555f340c4f043df7281d87270d27a)
+
+[VLIZ catalogue](https://www.vliz.be/imis?dasid=8229)
+
+[EMODnet viewer](https://emodnet.ec.europa.eu/geoviewer/?layers=12980:1:1&basemap=ebwbl&active=12980&bounds=-8248235.3083528,3721498.002604292,10922700.319775922,12098797.477604292&filters=&projection=EPSG:3857)
+
+[EMODnet ERDDAP](https://erddap.emodnet.eu/erddap/files/biology_8229_fb0d_a499_0111/all_diversity_measures.nc)
 
 ### Authors
 
